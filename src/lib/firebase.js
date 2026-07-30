@@ -2,7 +2,7 @@ import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
-// Actual Firebase config from user
+// TODO: Replace with actual Firebase config from user later
 const firebaseConfig = {
   apiKey: "AIzaSyAJdsJMa8cSSXBjow4fuAnjfO9kYj_MEe0",
   authDomain: "royal-apostolic-church-system.firebaseapp.com",

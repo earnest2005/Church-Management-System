@@ -92,7 +92,11 @@ export function AuthProvider({ children }) {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
       if (user) {
-        await syncUserToFirestore(user);
+        try {
+          await syncUserToFirestore(user);
+        } catch (err) {
+          console.error("Auth sync error:", err);
+        }
       }
       setLoading(false);
     });
@@ -112,7 +116,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={value}>
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 }

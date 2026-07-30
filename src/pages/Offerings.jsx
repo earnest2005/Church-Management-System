@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, query, orderBy, Timestamp } from 'firebase/firestore';
+import { collection, getDocs, addDoc, query, orderBy, Timestamp, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useModal } from '../contexts/ModalContext';
-import { Search, Plus, TrendingUp, Calendar, CreditCard, Loader2 } from 'lucide-react';
+import { Search, Plus, TrendingUp, Calendar, CreditCard, Loader2, UserPlus, UserCheck, UserX } from 'lucide-react';
 
 export default function Offerings() {
   const { currentUser } = useAuth();
@@ -19,6 +19,13 @@ export default function Offerings() {
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [giverMode, setGiverMode] = useState('existing'); // 'existing' | 'new' | 'anonymous'
+  const [newMemberData, setNewMemberData] = useState({
+    firstName: '',
+    lastName: '',
+    phone: '',
+    address: ''
+  });
   const [formData, setFormData] = useState({
     amount: '',
     type: 'General Offering',
@@ -47,7 +54,7 @@ export default function Offerings() {
       const membersSnap = await getDocs(collection(db, 'members'));
       const membersData = membersSnap.docs.map(doc => ({
         id: doc.id,
-        name: `${doc.data().firstName} ${doc.data().lastName}`
+        name: `${doc.data().firstName} ${doc.data().lastName}`.trim()
       }));
       setMembers(membersData);
 
@@ -76,21 +83,46 @@ export default function Offerings() {
       await showAlert('Invalid Amount', 'Please enter a valid amount greater than 0.', 'warning');
       return;
     }
-    
+
     try {
       setSubmitting(true);
       const dateObj = new Date(formData.date);
       
-      const memberName = formData.memberId 
-        ? members.find(m => m.id === formData.memberId)?.name || 'Unknown' 
-        : 'Anonymous';
+      let finalMemberId = null;
+      let finalMemberName = 'Anonymous';
+
+      if (giverMode === 'existing') {
+        if (formData.memberId) {
+          finalMemberId = formData.memberId;
+          finalMemberName = members.find(m => m.id === formData.memberId)?.name || 'Unknown Member';
+        }
+      } else if (giverMode === 'new') {
+        if (!newMemberData.firstName.trim()) {
+          await showAlert('Missing Information', 'Please enter at least the first name of the new person.', 'warning');
+          setSubmitting(false);
+          return;
+        }
+
+        // Register new member into Firestore members collection
+        const newMemberRef = await addDoc(collection(db, 'members'), {
+          firstName: newMemberData.firstName.trim(),
+          lastName: newMemberData.lastName.trim(),
+          phone: newMemberData.phone.trim(),
+          address: newMemberData.address.trim(),
+          status: 'Active',
+          createdAt: serverTimestamp()
+        });
+
+        finalMemberId = newMemberRef.id;
+        finalMemberName = `${newMemberData.firstName.trim()} ${newMemberData.lastName.trim()}`.trim();
+      }
 
       await addDoc(collection(db, 'offerings'), {
         amount: Number(formData.amount),
         type: formData.type,
         paymentMethod: formData.paymentMethod,
-        memberId: formData.memberId || null,
-        memberName: memberName,
+        memberId: finalMemberId,
+        memberName: finalMemberName,
         date: Timestamp.fromDate(dateObj),
         recordedBy: currentUser?.email,
         createdAt: Timestamp.now()
@@ -104,7 +136,9 @@ export default function Offerings() {
         memberId: '',
         date: new Date().toISOString().split('T')[0]
       });
-      fetchData(); // Refresh list
+      setGiverMode('existing');
+      setNewMemberData({ firstName: '', lastName: '', phone: '', address: '' });
+      fetchData(); // Refresh offering list & registered members list
     } catch (error) {
       console.error("Error recording offering:", error);
       await showAlert('Error', 'Failed to record offering. Check console for details.', 'error');
@@ -136,7 +170,11 @@ export default function Offerings() {
           <p className="text-slate-500 dark:text-slate-400 mt-1">Track tithes, general offerings, and special funds.</p>
         </div>
         <button 
-          onClick={() => setIsModalOpen(true)}
+          onClick={() => {
+            setGiverMode('existing');
+            setNewMemberData({ firstName: '', lastName: '', phone: '', address: '' });
+            setIsModalOpen(true);
+          }}
           className="flex items-center px-5 py-2.5 bg-royal-blue hover:bg-blue-800 text-white font-semibold rounded-xl transition-colors shadow-md shadow-blue-900/20"
         >
           <Plus className="h-5 w-5 mr-2" />
@@ -210,7 +248,7 @@ export default function Offerings() {
                 filteredOfferings.map((offering) => (
                   <tr key={offering.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900 dark:text-white">
-                      {offering.date.toDate().toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' })}
+                      {offering.date?.toDate ? offering.date.toDate().toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="font-bold text-slate-900 dark:text-white">
@@ -292,17 +330,118 @@ export default function Offerings() {
                 </div>
               </div>
               
+              {/* Member / Giver Selection Mode */}
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Linked Member (Optional)</label>
-                <select 
-                  value={formData.memberId} onChange={(e) => setFormData({...formData, memberId: e.target.value})}
-                  className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-royal-blue dark:text-white"
-                >
-                  <option value="">-- Anonymous / Walk-in --</option>
-                  {members.map(m => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Member / Giver</label>
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  <button
+                    type="button"
+                    onClick={() => setGiverMode('existing')}
+                    className={`py-2 px-2 text-xs font-semibold rounded-xl border transition-all flex items-center justify-center gap-1 ${
+                      giverMode === 'existing'
+                        ? 'bg-royal-blue text-white border-royal-blue shadow-sm'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <UserCheck className="w-3.5 h-3.5" />
+                    Existing Member
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGiverMode('new')}
+                    className={`py-2 px-2 text-xs font-semibold rounded-xl border transition-all flex items-center justify-center gap-1 ${
+                      giverMode === 'new'
+                        ? 'bg-royal-blue text-white border-royal-blue shadow-sm'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <UserPlus className="w-3.5 h-3.5" />
+                    + New Person
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGiverMode('anonymous')}
+                    className={`py-2 px-2 text-xs font-semibold rounded-xl border transition-all flex items-center justify-center gap-1 ${
+                      giverMode === 'anonymous'
+                        ? 'bg-royal-blue text-white border-royal-blue shadow-sm'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <UserX className="w-3.5 h-3.5" />
+                    Anonymous
+                  </button>
+                </div>
+
+                {giverMode === 'existing' && (
+                  <select 
+                    value={formData.memberId} 
+                    onChange={(e) => setFormData({...formData, memberId: e.target.value})}
+                    className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-royal-blue dark:text-white"
+                  >
+                    <option value="">-- Select Member --</option>
+                    {members.map(m => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </select>
+                )}
+
+                {giverMode === 'new' && (
+                  <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3 animate-in fade-in duration-200">
+                    <p className="text-xs font-semibold text-royal-blue dark:text-blue-400 flex items-center gap-1">
+                      ✨ This person will automatically be registered in the Member Directory.
+                    </p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">First Name *</label>
+                        <input 
+                          type="text" required
+                          value={newMemberData.firstName} 
+                          onChange={(e) => setNewMemberData({...newMemberData, firstName: e.target.value})}
+                          placeholder="First Name"
+                          className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-royal-blue dark:text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Last Name</label>
+                        <input 
+                          type="text"
+                          value={newMemberData.lastName} 
+                          onChange={(e) => setNewMemberData({...newMemberData, lastName: e.target.value})}
+                          placeholder="Last Name"
+                          className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-royal-blue dark:text-white"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Phone Number</label>
+                        <input 
+                          type="tel"
+                          value={newMemberData.phone} 
+                          onChange={(e) => setNewMemberData({...newMemberData, phone: e.target.value})}
+                          placeholder="Phone (optional)"
+                          className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-royal-blue dark:text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Address</label>
+                        <input 
+                          type="text"
+                          value={newMemberData.address} 
+                          onChange={(e) => setNewMemberData({...newMemberData, address: e.target.value})}
+                          placeholder="Address (optional)"
+                          className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-royal-blue dark:text-white"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {giverMode === 'anonymous' && (
+                  <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700 text-xs text-slate-500 dark:text-slate-400">
+                    Recorded as Anonymous / Walk-in offering.
+                  </div>
+                )}
               </div>
 
               <div>
@@ -336,3 +475,4 @@ export default function Offerings() {
     </div>
   );
 }
+
